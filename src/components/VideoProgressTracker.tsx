@@ -23,7 +23,6 @@ interface VideoProgressTrackerProps {
   onRefresh: () => void;
   onSelectRecentFolder: (path: string) => void;
 }
-
 export const VideoProgressTracker: React.FC<VideoProgressTrackerProps> = ({
   scanResult,
   userData,
@@ -34,11 +33,24 @@ export const VideoProgressTracker: React.FC<VideoProgressTrackerProps> = ({
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [filterMode, setFilterMode] = useState<'all' | 'in-progress' | 'completed'>('all');
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const handleToggleVideo = async (videoPath: string, markWatched: boolean) => {
     if (!scanResult) return;
-    await tauriApi.toggleVideoWatched(videoPath, markWatched, scanResult.root_path);
-    onRefresh();
+    setErrorMessage(null);
+    try {
+      await tauriApi.toggleVideoWatched(videoPath, markWatched, scanResult.root_path);
+      onRefresh();
+    } catch (err: unknown) {
+      console.error('Failed to toggle video status:', err);
+      const message =
+        typeof err === 'string'
+          ? err
+          : err instanceof Error
+            ? err.message
+            : 'Failed to move video file';
+      setErrorMessage(message);
+    }
   };
 
   if (!scanResult && !isLoading) {
@@ -128,6 +140,30 @@ export const VideoProgressTracker: React.FC<VideoProgressTrackerProps> = ({
 
   return (
     <div>
+      {errorMessage && (
+        <div
+          style={{
+            background: 'rgba(244, 63, 94, 0.15)',
+            border: '1px solid rgba(244, 63, 94, 0.3)',
+            color: 'var(--accent-rose)',
+            padding: '0.6rem 1rem',
+            borderRadius: 'var(--radius-md)',
+            marginBottom: '1rem',
+            fontSize: '0.85rem',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+          }}
+        >
+          <span>⚠️ {errorMessage}</span>
+          <button
+            onClick={() => setErrorMessage(null)}
+            style={{ background: 'none', border: 'none', color: 'inherit', cursor: 'pointer' }}
+          >
+            ✕
+          </button>
+        </div>
+      )}
       {/* Course Hero Stats Card */}
       <div className="course-hero-card">
         <div className="hero-glow-accent" />

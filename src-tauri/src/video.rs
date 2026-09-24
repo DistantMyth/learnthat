@@ -22,20 +22,21 @@ pub fn is_video_file(path: &Path) -> bool {
 }
 
 /// Extract duration of video file in seconds.
+///
 /// 1. Try ffprobe first as it handles all video containers accurately.
 /// 2. If mp4/m4v/mov, use pure-Rust mp4 reader.
-/// Returns None if probing fails (we do NOT fabricate fake durations from bitrate).
+/// Returns None if probing fails (we do not fabricate fake durations).
 pub fn get_video_duration(path: &Path) -> Option<f64> {
     // 1. Try ffprobe first as it supports all video containers
     if let Some(dur) = get_duration_with_ffprobe(path) {
-        if dur > 0.05 {
+        if dur > 0.05 && dur.is_finite() {
             return Some(dur);
         }
     }
 
     // 2. Try pure Rust mp4 parser
     if let Some(dur) = get_duration_with_mp4_crate(path) {
-        if dur > 0.05 {
+        if dur > 0.05 && dur.is_finite() {
             return Some(dur);
         }
     }
@@ -54,7 +55,7 @@ fn get_duration_with_mp4_crate(path: &Path) -> Option<f64> {
     let timescale = reader.timescale();
     if timescale > 0 {
         let secs = duration.as_secs() as f64 + (duration.subsec_nanos() as f64 / 1_000_000_000.0);
-        if secs > 0.05 {
+        if secs > 0.05 && secs.is_finite() {
             return Some(secs);
         }
     }
@@ -62,6 +63,7 @@ fn get_duration_with_mp4_crate(path: &Path) -> Option<f64> {
 }
 
 fn get_duration_with_ffprobe(path: &Path) -> Option<f64> {
+    // Run ffprobe with timeout or direct args
     let output = Command::new("ffprobe")
         .args([
             "-v",
@@ -80,7 +82,12 @@ fn get_duration_with_ffprobe(path: &Path) -> Option<f64> {
     }
 
     let text = String::from_utf8_lossy(&output.stdout);
-    text.trim().parse::<f64>().ok()
+    let parsed = text.trim().parse::<f64>().ok()?;
+    if parsed.is_finite() && parsed > 0.05 {
+        Some(parsed)
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]

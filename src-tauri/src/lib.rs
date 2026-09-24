@@ -48,27 +48,30 @@ fn toggle_video_watched(
 ) -> Result<Option<ScanResult>, String> {
     let v_path = Path::new(&video_path);
 
-    // Validate that the video path resides within the active learning folder (or folder_to_rescan)
+    // Fail closed: enforce active root boundary from server-side stored active folder or rescan
     let active_root = {
         let data = state.user_data.lock().map_err(|e| e.to_string())?;
-        folder_to_rescan
+        data.active_folder
             .clone()
-            .or_else(|| data.active_folder.clone())
+            .or_else(|| folder_to_rescan.clone())
     };
 
     if let Some(root) = &active_root {
         let root_p = Path::new(root);
-        // Canonicalize or check prefix to prevent arbitrary filesystem moves
-        if let (Ok(canon_v), Ok(canon_root)) = (v_path.canonicalize(), root_p.canonicalize()) {
-            if !canon_v.starts_with(&canon_root) {
-                return Err("Path security violation: video does not reside within active course root".to_string());
-            }
+        let canon_v = v_path
+            .canonicalize()
+            .map_err(|_| "Failed to resolve video path".to_string())?;
+        let canon_root = root_p
+            .canonicalize()
+            .map_err(|_| "Failed to resolve root course path".to_string())?;
+
+        if !canon_v.starts_with(&canon_root) {
+            return Err("Path security violation: video does not reside within active course root".to_string());
         }
     }
 
     move_video_status(v_path, mark_as_watched)?;
 
-    // If folder_to_rescan was provided, rescan and return the updated tree
     if let Some(folder) = folder_to_rescan {
         let scan_res = scan_learning_directory(Path::new(&folder))?;
         return Ok(Some(scan_res));
