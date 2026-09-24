@@ -69,13 +69,30 @@ pub fn format_duration(seconds: f64) -> String {
     }
 }
 
-/// Collect videos in a direct directory (non-recursive for current lesson level, or direct in done)
-fn collect_videos_in_dir(dir: &Path, is_watched: bool) -> Vec<VideoItem> {
+/// Recursively collect videos inside a directory tree, but when collecting pending videos
+/// for a lesson folder, do NOT traverse into the `done/` subfolder.
+fn collect_videos_in_dir(dir: &Path, is_watched: bool, skip_done_dir: bool) -> Vec<VideoItem> {
     let mut videos = Vec::new();
-    if let Ok(entries) = fs::read_dir(dir) {
-        for entry in entries.flatten() {
+
+    let walker = WalkDir::new(dir).follow_links(false).into_iter();
+
+    for entry in walker.filter_entry(|e| {
+        if skip_done_dir && e.file_type().is_dir() {
+            let name = e.file_name().to_string_lossy();
+            if name.eq_ignore_ascii_case("done") {
+                return false;
+            }
+        }
+        true
+    }) {
+        let entry = match entry {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+
+        if entry.file_type().is_file() {
             let path = entry.path();
-            if is_video_file(&path) {
+            if is_video_file(path) {
                 let name = path
                     .file_name()
                     .and_then(|n| n.to_str())
@@ -83,7 +100,7 @@ fn collect_videos_in_dir(dir: &Path, is_watched: bool) -> Vec<VideoItem> {
                     .to_string();
 
                 let size_bytes = entry.metadata().map(|m| m.len()).unwrap_or(0);
-                let duration = get_video_duration(&path).unwrap_or(0.0);
+                let duration = get_video_duration(path).unwrap_or(0.0);
 
                 videos.push(VideoItem {
                     name,
@@ -156,8 +173,8 @@ pub fn scan_learning_directory(root_path: &Path) -> Result<ScanResult, String> {
             .unwrap_or("Untitled Lesson")
             .to_string();
 
-        let watched_videos = collect_videos_in_dir(&done_path, true);
-        let pending_videos = collect_videos_in_dir(&lesson_path, false);
+        let watched_videos = collect_videos_in_dir(&done_path, true, false);
+        let pending_videos = collect_videos_in_dir(&lesson_path, false, true);
 
         let watched_count = watched_videos.len();
         let pending_count = pending_videos.len();
@@ -240,9 +257,14 @@ pub fn scan_learning_directory(root_path: &Path) -> Result<ScanResult, String> {
 
 /// Helper function allowing the user to mark a video as watched by moving it into the "done" directory,
 /// or mark as unwatched by moving it back to the lesson directory.
+/// Validates video extension, prevents overwriting existing files, and prevents nested done/done moves.
 pub fn move_video_status(video_path: &Path, mark_as_watched: bool) -> Result<String, String> {
     if !video_path.exists() {
         return Err(format!("Video file does not exist: {:?}", video_path));
+    }
+
+    if !is_video_file(video_path) {
+        return Err("Target path is not a recognized video file".to_string());
     }
 
     let file_name = video_path
@@ -253,20 +275,22 @@ pub fn move_video_status(video_path: &Path, mark_as_watched: bool) -> Result<Str
         .parent()
         .ok_or_else(|| "No parent directory".to_string())?;
 
+    let is_currently_in_done = parent_dir
+        .file_name()
+        .map(|n| n.to_string_lossy().eq_ignore_ascii_case("done"))
+        .unwrap_or(false);
+
     let dest_path = if mark_as_watched {
-        // Video is currently in lesson dir, move to lesson_dir/done/
+        if is_currently_in_done {
+            return Err("Video is already in the 'done' folder".to_string());
+        }
         let done_dir = parent_dir.join("done");
         if !done_dir.exists() {
             fs::create_dir_all(&done_dir).map_err(|e| e.to_string())?;
         }
         done_dir.join(file_name)
     } else {
-        // Video is currently in done dir, move to parent of done dir (the lesson dir)
-        if !parent_dir
-            .file_name()
-            .map(|n| n.to_string_lossy().eq_ignore_ascii_case("done"))
-            .unwrap_or(false)
-        {
+        if !is_currently_in_done {
             return Err("Video is not in a 'done' folder".to_string());
         }
         let lesson_dir = parent_dir
@@ -274,6 +298,13 @@ pub fn move_video_status(video_path: &Path, mark_as_watched: bool) -> Result<Str
             .ok_or_else(|| "No lesson directory parent".to_string())?;
         lesson_dir.join(file_name)
     };
+
+    if dest_path.exists() {
+        return Err(format!(
+            "Destination file already exists: {:?}. Rename or remove it before moving to prevent data loss.",
+            dest_path
+        ));
+    }
 
     fs::rename(video_path, &dest_path).map_err(|e| format!("Failed to move video: {}", e))?;
 
@@ -295,7 +326,7 @@ mod tests {
 
     #[test]
     fn test_scan_learning_directory() {
-        let temp_dir = std::env::temp_dir().join("learnthat_test_scan");
+        let temp_dir = std::env::temp_dir().join("learnthat_test_scan_v2");
         let _ = fs::remove_dir_all(&temp_dir);
         fs::create_dir_all(&temp_dir).unwrap();
 
@@ -315,6 +346,37 @@ mod tests {
         assert_eq!(result.lessons[0].name, "01 - Basics");
         assert_eq!(result.lessons[0].watched_videos_count, 1);
         assert_eq!(result.lessons[0].pending_videos_count, 1);
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_move_video_status_prevent_collision_and_double_done() {
+        let temp_dir = std::env::temp_dir().join("learnthat_test_move_guards");
+        let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        let lesson = temp_dir.join("LessonA");
+        let lesson_done = lesson.join("done");
+        fs::create_dir_all(&lesson_done).unwrap();
+
+        let vid = lesson.join("test.mp4");
+        File::create(&vid).unwrap();
+
+        // 1. Mark as watched
+        let dest = move_video_status(&vid, true).unwrap();
+        assert!(Path::new(&dest).exists());
+
+        // 2. Calling mark as watched again on the video now in done must fail!
+        let err = move_video_status(Path::new(&dest), true);
+        assert!(err.is_err());
+        assert!(err.unwrap_err().contains("already in the 'done' folder"));
+
+        // 3. Destination collision test: create duplicate file in lesson dir and try to undo
+        File::create(&vid).unwrap();
+        let collision_err = move_video_status(Path::new(&dest), false);
+        assert!(collision_err.is_err());
+        assert!(collision_err.unwrap_err().contains("already exists"));
 
         let _ = fs::remove_dir_all(&temp_dir);
     }

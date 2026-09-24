@@ -4,9 +4,12 @@ pub mod video;
 
 use scanner::{move_video_status, scan_learning_directory, ScanResult};
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use storage::{load_user_data, save_user_data, AppUserData, ChecklistItem, LessonUserData};
 use tauri::State;
+
+static CHECKLIST_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 pub struct AppState {
     pub user_data: Mutex<AppUserData>,
@@ -41,9 +44,29 @@ fn toggle_video_watched(
     video_path: String,
     mark_as_watched: bool,
     folder_to_rescan: Option<String>,
+    state: State<'_, AppState>,
 ) -> Result<Option<ScanResult>, String> {
-    let path = Path::new(&video_path);
-    move_video_status(path, mark_as_watched)?;
+    let v_path = Path::new(&video_path);
+
+    // Validate that the video path resides within the active learning folder (or folder_to_rescan)
+    let active_root = {
+        let data = state.user_data.lock().map_err(|e| e.to_string())?;
+        folder_to_rescan
+            .clone()
+            .or_else(|| data.active_folder.clone())
+    };
+
+    if let Some(root) = &active_root {
+        let root_p = Path::new(root);
+        // Canonicalize or check prefix to prevent arbitrary filesystem moves
+        if let (Ok(canon_v), Ok(canon_root)) = (v_path.canonicalize(), root_p.canonicalize()) {
+            if !canon_v.starts_with(&canon_root) {
+                return Err("Path security violation: video does not reside within active course root".to_string());
+            }
+        }
+    }
+
+    move_video_status(v_path, mark_as_watched)?;
 
     // If folder_to_rescan was provided, rescan and return the updated tree
     if let Some(folder) = folder_to_rescan {
@@ -109,20 +132,23 @@ fn add_lesson_checklist_item(
             updated_at: 0,
         });
 
-    let now = std::time::SystemTime::now()
+    let now_nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
+        .map(|d| d.as_nanos())
         .unwrap_or(0);
 
+    let counter = CHECKLIST_COUNTER.fetch_add(1, Ordering::SeqCst);
+    let item_id = format!("chk_{}_{}", now_nanos, counter);
+
     let item = ChecklistItem {
-        id: format!("chk_{}", now),
+        id: item_id,
         text,
         completed: false,
-        created_at: now,
+        created_at: (now_nanos / 1_000_000_000) as u64,
     };
 
     entry.checklist.push(item.clone());
-    entry.updated_at = now;
+    entry.updated_at = item.created_at;
 
     save_user_data(&data)?;
     Ok(item)
@@ -165,11 +191,15 @@ fn delete_lesson_checklist_item(
 
 #[tauri::command]
 fn open_in_file_manager(path: String) -> Result<(), String> {
+    let p = Path::new(&path);
+    if !p.exists() {
+        return Err(format!("Path does not exist on disk: {:?}", path));
+    }
+
     #[cfg(target_os = "windows")]
     {
         std::process::Command::new("explorer")
-            .arg("/select,")
-            .arg(&path)
+            .arg(format!("/select,{}", path))
             .spawn()
             .map_err(|e| e.to_string())?;
     }
@@ -183,8 +213,6 @@ fn open_in_file_manager(path: String) -> Result<(), String> {
     }
     #[cfg(target_os = "linux")]
     {
-        // Try xdg-open on parent directory if it's a file
-        let p = Path::new(&path);
         let target = if p.is_file() {
             p.parent().unwrap_or(p)
         } else {

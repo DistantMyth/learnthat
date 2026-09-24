@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   FolderOpen,
   CheckCircle2,
@@ -35,6 +35,12 @@ export const LessonCard: React.FC<LessonCardProps> = ({
   const [notesText, setNotesText] = useState(userData?.notes || '');
   const [isSavingNotes, setIsSavingNotes] = useState(false);
 
+  // Keep notes in sync if userData updates externally
+  useEffect(() => {
+    if (userData?.notes !== undefined) {
+      setNotesText(userData.notes);
+    }
+  }, [userData?.notes]);
   const isCompleted =
     lesson.progress_percent >= 99.9 ||
     (lesson.pending_videos_count === 0 && lesson.watched_videos_count > 0);

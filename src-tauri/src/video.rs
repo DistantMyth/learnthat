@@ -22,9 +22,9 @@ pub fn is_video_file(path: &Path) -> bool {
 }
 
 /// Extract duration of video file in seconds.
-/// 1. If ffprobe is installed on user system, use it (handles all video formats accurately).
+/// 1. Try ffprobe first as it handles all video containers accurately.
 /// 2. If mp4/m4v/mov, use pure-Rust mp4 reader.
-/// 3. If neither works, estimate a reasonable default based on filesize (e.g. standard bitrate) so tracker never breaks.
+/// Returns None if probing fails (we do NOT fabricate fake durations from bitrate).
 pub fn get_video_duration(path: &Path) -> Option<f64> {
     // 1. Try ffprobe first as it supports all video containers
     if let Some(dur) = get_duration_with_ffprobe(path) {
@@ -37,16 +37,6 @@ pub fn get_video_duration(path: &Path) -> Option<f64> {
     if let Some(dur) = get_duration_with_mp4_crate(path) {
         if dur > 0.05 {
             return Some(dur);
-        }
-    }
-
-    // 3. Fallback: Estimate ~ 2.5 Mbps average bitrate for instructional video
-    if let Ok(metadata) = path.metadata() {
-        let size = metadata.len();
-        if size > 1024 {
-            let bytes_per_sec = (2.5 * 1024.0 * 1024.0) / 8.0; // 327,680 B/s
-            let est_seconds = size as f64 / bytes_per_sec;
-            return Some(est_seconds.max(1.0));
         }
     }
 
