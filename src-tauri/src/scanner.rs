@@ -106,8 +106,23 @@ fn collect_videos_in_dir(dir: &Path, is_watched: bool) -> Vec<VideoItem> {
     videos
 }
 
+/// Find existing done directory case-insensitively inside parent
+fn find_existing_done_dir(parent_dir: &Path) -> Option<PathBuf> {
+    if let Ok(entries) = fs::read_dir(parent_dir) {
+        for entry in entries.flatten() {
+            if entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
+                if entry.file_name().to_string_lossy().eq_ignore_ascii_case("done") {
+                    return Some(entry.path());
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Recursively find all folders named "done" (case-insensitive) under `root`.
 /// Wherever a "done" directory is found, its parent directory is treated as a Lesson.
+/// Skips when the selected root itself is named "done" to avoid escaping outside root.
 pub fn scan_learning_directory(root_path: &Path) -> Result<ScanResult, String> {
     if !root_path.exists() {
         return Err(format!("Path does not exist: {:?}", root_path));
@@ -122,9 +137,14 @@ pub fn scan_learning_directory(root_path: &Path) -> Result<ScanResult, String> {
         .unwrap_or("Learning Library")
         .to_string();
 
+    let canon_root = root_path
+        .canonicalize()
+        .map_err(|e| format!("Cannot resolve root path: {}", e))?;
+
     let mut lesson_dirs: Vec<(PathBuf, PathBuf)> = Vec::new();
 
     for entry in WalkDir::new(root_path)
+        .min_depth(1) // Avoid matching the root itself if root is named "done"
         .follow_links(false)
         .into_iter()
         .flatten()
@@ -134,14 +154,17 @@ pub fn scan_learning_directory(root_path: &Path) -> Result<ScanResult, String> {
             if folder_name.eq_ignore_ascii_case("done") {
                 let done_path = entry.path().to_path_buf();
                 if let Some(parent) = done_path.parent() {
-                    // Parent is the lesson folder
-                    lesson_dirs.push((parent.to_path_buf(), done_path));
+                    // Ensure parent is within the scanned root
+                    if let Ok(canon_parent) = parent.canonicalize() {
+                        if canon_parent.starts_with(&canon_root) {
+                            lesson_dirs.push((parent.to_path_buf(), done_path));
+                        }
+                    }
                 }
             }
         }
     }
 
-    // Deduplicate lesson dirs if any
     lesson_dirs.sort_by(|a, b| a.0.cmp(&b.0));
     lesson_dirs.dedup_by(|a, b| a.0 == b.0);
 
@@ -241,8 +264,6 @@ pub fn scan_learning_directory(root_path: &Path) -> Result<ScanResult, String> {
     })
 }
 
-/// Helper function allowing the user to mark a video as watched by moving it into the "done" directory,
-/// or mark as unwatched by moving it back to the lesson directory.
 pub fn move_video_status(video_path: &Path, mark_as_watched: bool) -> Result<String, String> {
     if !video_path.exists() {
         return Err(format!("Video file does not exist: {:?}", video_path));
@@ -269,7 +290,7 @@ pub fn move_video_status(video_path: &Path, mark_as_watched: bool) -> Result<Str
         if is_currently_in_done {
             return Err("Video is already in the 'done' folder".to_string());
         }
-        let done_dir = parent_dir.join("done");
+        let done_dir = find_existing_done_dir(parent_dir).unwrap_or_else(|| parent_dir.join("done"));
         if !done_dir.exists() {
             fs::create_dir_all(&done_dir).map_err(|e| e.to_string())?;
         }
@@ -307,11 +328,12 @@ mod tests {
         assert_eq!(format_duration(45.0), "45s");
         assert_eq!(format_duration(90.0), "1m 30s");
         assert_eq!(format_duration(3665.0), "1h 01m 05s");
+        assert_eq!(format_duration(-10.0), "0s");
     }
 
     #[test]
     fn test_scan_learning_directory() {
-        let temp_dir = std::env::temp_dir().join("learnthat_test_scan_v3");
+        let temp_dir = std::env::temp_dir().join("learnthat_test_scan_v4");
         let _ = fs::remove_dir_all(&temp_dir);
         fs::create_dir_all(&temp_dir).unwrap();
 
@@ -336,7 +358,7 @@ mod tests {
 
     #[test]
     fn test_move_video_status_prevent_collision_and_double_done() {
-        let temp_dir = std::env::temp_dir().join("learnthat_test_move_guards_v3");
+        let temp_dir = std::env::temp_dir().join("learnthat_test_move_guards_v4");
         let _ = fs::remove_dir_all(&temp_dir);
         fs::create_dir_all(&temp_dir).unwrap();
 

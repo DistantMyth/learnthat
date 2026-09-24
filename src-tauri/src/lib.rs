@@ -48,26 +48,25 @@ fn toggle_video_watched(
 ) -> Result<Option<ScanResult>, String> {
     let v_path = Path::new(&video_path);
 
-    // Fail closed: enforce active root boundary from server-side stored active folder or rescan
+    // Fail closed: require active root to be present
     let active_root = {
         let data = state.user_data.lock().map_err(|e| e.to_string())?;
         data.active_folder
             .clone()
-            .or_else(|| folder_to_rescan.clone())
+            .or(folder_to_rescan.clone())
+            .ok_or_else(|| "No active course folder selected; action forbidden".to_string())?
     };
 
-    if let Some(root) = &active_root {
-        let root_p = Path::new(root);
-        let canon_v = v_path
-            .canonicalize()
-            .map_err(|_| "Failed to resolve video path".to_string())?;
-        let canon_root = root_p
-            .canonicalize()
-            .map_err(|_| "Failed to resolve root course path".to_string())?;
+    let root_p = Path::new(&active_root);
+    let canon_v = v_path
+        .canonicalize()
+        .map_err(|_| "Failed to resolve video path".to_string())?;
+    let canon_root = root_p
+        .canonicalize()
+        .map_err(|_| "Failed to resolve active course path".to_string())?;
 
-        if !canon_v.starts_with(&canon_root) {
-            return Err("Path security violation: video does not reside within active course root".to_string());
-        }
+    if !canon_v.starts_with(&canon_root) {
+        return Err("Security violation: video path does not reside within active course root".to_string());
     }
 
     move_video_status(v_path, mark_as_watched)?;
@@ -173,9 +172,11 @@ fn toggle_lesson_checklist_item(
                 .map(|d| d.as_secs())
                 .unwrap_or(0);
             save_user_data(&data)?;
+            return Ok(());
         }
+        return Err("Checklist item not found".to_string());
     }
-    Ok(())
+    Err("Lesson not found".to_string())
 }
 
 #[tauri::command]
@@ -186,17 +187,37 @@ fn delete_lesson_checklist_item(
 ) -> Result<(), String> {
     let mut data = state.user_data.lock().map_err(|e| e.to_string())?;
     if let Some(entry) = data.lessons_data.get_mut(&lesson_id) {
+        let initial_len = entry.checklist.len();
         entry.checklist.retain(|c| c.id != item_id);
-        save_user_data(&data)?;
+        if entry.checklist.len() < initial_len {
+            save_user_data(&data)?;
+            return Ok(());
+        }
+        return Err("Checklist item not found".to_string());
     }
-    Ok(())
+    Err("Lesson not found".to_string())
 }
 
 #[tauri::command]
-fn open_in_file_manager(path: String) -> Result<(), String> {
+fn open_in_file_manager(path: String, state: State<'_, AppState>) -> Result<(), String> {
     let p = Path::new(&path);
     if !p.exists() {
         return Err(format!("Path does not exist on disk: {:?}", path));
+    }
+
+    // Fail closed: enforce active root boundary for opening files/folders
+    let active_root = {
+        let data = state.user_data.lock().map_err(|e| e.to_string())?;
+        data.active_folder.clone()
+    };
+
+    if let Some(root) = active_root {
+        let root_p = Path::new(&root);
+        if let (Ok(canon_p), Ok(canon_root)) = (p.canonicalize(), root_p.canonicalize()) {
+            if !canon_p.starts_with(&canon_root) {
+                return Err("Security violation: path is outside active course directory".to_string());
+            }
+        }
     }
 
     #[cfg(target_os = "windows")]
