@@ -245,6 +245,7 @@ export function App() {
               onSelectFolder={handleSelectFolder}
               onRefresh={handleRefresh}
               onSelectRecentFolder={handleScan}
+              onScanResultChange={(updater) => setScanResult(updater)}
             />
           )}
 

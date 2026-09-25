@@ -1,7 +1,9 @@
+pub mod cache;
 pub mod scanner;
 pub mod storage;
 pub mod video;
 
+use cache::transfer_cache_entry;
 use scanner::{move_video_status, scan_learning_directory, ScanResult};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -43,9 +45,9 @@ fn scan_folder(folder_path: String, state: State<'_, AppState>) -> Result<ScanRe
 fn toggle_video_watched(
     video_path: String,
     mark_as_watched: bool,
-    folder_to_rescan: Option<String>,
+    video_duration: Option<f64>,
     state: State<'_, AppState>,
-) -> Result<Option<ScanResult>, String> {
+) -> Result<String, String> {
     let v_path = Path::new(&video_path);
 
     // Fail closed: require active root to be present
@@ -53,7 +55,6 @@ fn toggle_video_watched(
         let data = state.user_data.lock().map_err(|e| e.to_string())?;
         data.active_folder
             .clone()
-            .or(folder_to_rescan.clone())
             .ok_or_else(|| "No active course folder selected; action forbidden".to_string())?
     };
 
@@ -69,14 +70,14 @@ fn toggle_video_watched(
         return Err("Security violation: video path does not reside within active course root".to_string());
     }
 
-    move_video_status(v_path, mark_as_watched)?;
+    let new_dest = move_video_status(v_path, mark_as_watched)?;
 
-    if let Some(folder) = folder_to_rescan {
-        let scan_res = scan_learning_directory(Path::new(&folder))?;
-        return Ok(Some(scan_res));
+    // Update in-memory duration cache to point to the new location instantly
+    if let Some(dur) = video_duration {
+        transfer_cache_entry(v_path, Path::new(&new_dest), dur);
     }
 
-    Ok(None)
+    Ok(new_dest)
 }
 
 #[tauri::command]

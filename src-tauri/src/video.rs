@@ -2,6 +2,8 @@ use std::fs::File;
 use std::path::Path;
 use std::process::Command;
 
+use crate::cache::{get_cached_duration, insert_cached_duration};
+
 /// Recognized video extensions
 pub const VIDEO_EXTENSIONS: &[&str] = &[
     "mp4", "mkv", "avi", "mov", "webm", "flv", "wmv", "m4v", "ts", "mts", "m2ts", "3gp", "ogv",
@@ -21,22 +23,25 @@ pub fn is_video_file(path: &Path) -> bool {
     }
 }
 
-/// Extract duration of video file in seconds.
-///
-/// 1. Try ffprobe first as it handles all video containers accurately.
-/// 2. If mp4/m4v/mov, use pure-Rust mp4 reader.
-/// Returns None if probing fails (we do not fabricate fake durations).
+/// Extract duration of video file in seconds with cache lookup.
 pub fn get_video_duration(path: &Path) -> Option<f64> {
-    // 1. Try ffprobe first as it supports all video containers
-    if let Some(dur) = get_duration_with_ffprobe(path) {
+    // Check in-memory cache first
+    if let Some(cached) = get_cached_duration(path) {
+        return Some(cached);
+    }
+
+    // 1. Try pure Rust mp4 parser first (instantaneous in-process, microsecond execution)
+    if let Some(dur) = get_duration_with_mp4_crate(path) {
         if dur > 0.05 && dur.is_finite() {
+            insert_cached_duration(path, dur);
             return Some(dur);
         }
     }
 
-    // 2. Try pure Rust mp4 parser
-    if let Some(dur) = get_duration_with_mp4_crate(path) {
+    // 2. Try ffprobe if available
+    if let Some(dur) = get_duration_with_ffprobe(path) {
         if dur > 0.05 && dur.is_finite() {
+            insert_cached_duration(path, dur);
             return Some(dur);
         }
     }
@@ -63,7 +68,6 @@ fn get_duration_with_mp4_crate(path: &Path) -> Option<f64> {
 }
 
 fn get_duration_with_ffprobe(path: &Path) -> Option<f64> {
-    // Run ffprobe with timeout or direct args
     let output = Command::new("ffprobe")
         .args([
             "-v",

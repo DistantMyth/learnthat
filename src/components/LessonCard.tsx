@@ -10,8 +10,9 @@ import {
   ChevronRight,
   Plus,
   Trash2,
+  Loader2,
 } from 'lucide-react';
-import type { Lesson, LessonUserData, ChecklistItem } from '../types';
+import type { Lesson, LessonUserData, ChecklistItem, VideoItem } from '../types';
 import { tauriApi } from '../services/tauriApi';
 
 interface LessonCardProps {
@@ -19,7 +20,8 @@ interface LessonCardProps {
   index: number;
   userData?: LessonUserData;
   onRefresh: () => void;
-  onToggleVideoStatus: (videoPath: string, markWatched: boolean) => Promise<void>;
+  onToggleVideoStatus: (video: VideoItem, lessonId: string, markWatched: boolean) => Promise<void>;
+  movingVideoPath?: string | null;
 }
 
 export const LessonCard: React.FC<LessonCardProps> = ({
@@ -28,6 +30,7 @@ export const LessonCard: React.FC<LessonCardProps> = ({
   userData,
   onRefresh,
   onToggleVideoStatus,
+  movingVideoPath,
 }) => {
   const [isExpanded, setIsExpanded] = useState<boolean>(index === 0);
   const [activeTab, setActiveTab] = useState<'videos' | 'checklist' | 'notes'>('videos');
@@ -41,6 +44,7 @@ export const LessonCard: React.FC<LessonCardProps> = ({
       setNotesText(userData.notes);
     }
   }, [userData?.notes]);
+
   const isCompleted =
     lesson.progress_percent >= 99.9 ||
     (lesson.pending_videos_count === 0 && lesson.watched_videos_count > 0);
@@ -190,27 +194,35 @@ export const LessonCard: React.FC<LessonCardProps> = ({
                       🎉 All videos in this lesson moved to "done"!
                     </div>
                   ) : (
-                    lesson.pending_videos.map((vid) => (
-                      <div key={vid.path} className="video-row">
-                        <div className="video-row-left">
-                          <Play size={14} style={{ color: 'var(--accent-amber)', flexShrink: 0 }} />
-                          <span className="video-name" title={vid.name}>
-                            {vid.name}
-                          </span>
+                    lesson.pending_videos.map((vid) => {
+                      const isMoving = movingVideoPath === vid.path;
+                      return (
+                        <div key={vid.path} className="video-row">
+                          <div className="video-row-left">
+                            <Play size={14} style={{ color: 'var(--accent-amber)', flexShrink: 0 }} />
+                            <span className="video-name" title={vid.name}>
+                              {vid.name}
+                            </span>
+                          </div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                            <span className="video-duration-badge">{vid.formatted_duration}</span>
+                            <button
+                              className="btn btn-secondary btn-sm"
+                              onClick={() => onToggleVideoStatus(vid, lesson.id, true)}
+                              disabled={isMoving}
+                              title="Mark as watched (moves file to 'done' folder)"
+                            >
+                              {isMoving ? (
+                                <Loader2 size={13} className="spin" />
+                              ) : (
+                                <CheckCircle2 size={13} style={{ color: 'var(--accent-teal)' }} />
+                              )}
+                              <span>Done</span>
+                            </button>
+                          </div>
                         </div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                          <span className="video-duration-badge">{vid.formatted_duration}</span>
-                          <button
-                            className="btn btn-secondary btn-sm"
-                            onClick={() => onToggleVideoStatus(vid.path, true)}
-                            title="Mark as watched (moves file to 'done' folder)"
-                          >
-                            <CheckCircle2 size={13} style={{ color: 'var(--accent-teal)' }} />
-                            <span>Done</span>
-                          </button>
-                        </div>
-                      </div>
-                    ))
+                      );
+                    })
                   )}
                 </div>
               </div>
@@ -239,33 +251,37 @@ export const LessonCard: React.FC<LessonCardProps> = ({
                       No videos in "done" folder yet.
                     </div>
                   ) : (
-                    lesson.watched_videos.map((vid) => (
-                      <div key={vid.path} className="video-row" style={{ opacity: 0.85 }}>
-                        <div className="video-row-left">
-                          <CheckCircle2
-                            size={14}
-                            style={{ color: 'var(--accent-teal)', flexShrink: 0 }}
-                          />
-                          <span
-                            className="video-name"
-                            style={{ textDecoration: 'line-through' }}
-                            title={vid.name}
-                          >
-                            {vid.name}
-                          </span>
+                    lesson.watched_videos.map((vid) => {
+                      const isMoving = movingVideoPath === vid.path;
+                      return (
+                        <div key={vid.path} className="video-row" style={{ opacity: 0.85 }}>
+                          <div className="video-row-left">
+                            <CheckCircle2
+                              size={14}
+                              style={{ color: 'var(--accent-teal)', flexShrink: 0 }}
+                            />
+                            <span
+                              className="video-name"
+                              style={{ textDecoration: 'line-through' }}
+                              title={vid.name}
+                            >
+                              {vid.name}
+                            </span>
+                          </div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                            <span className="video-duration-badge">{vid.formatted_duration}</span>
+                            <button
+                              className="btn btn-ghost btn-sm"
+                              onClick={() => onToggleVideoStatus(vid, lesson.id, false)}
+                              disabled={isMoving}
+                              title="Undo (moves file back to lesson folder)"
+                            >
+                              {isMoving ? <Loader2 size={12} className="spin" /> : <RotateCcw size={12} />}
+                            </button>
+                          </div>
                         </div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                          <span className="video-duration-badge">{vid.formatted_duration}</span>
-                          <button
-                            className="btn btn-ghost btn-sm"
-                            onClick={() => onToggleVideoStatus(vid.path, false)}
-                            title="Undo (moves file back to lesson folder)"
-                          >
-                            <RotateCcw size={12} />
-                          </button>
-                        </div>
-                      </div>
-                    ))
+                      );
+                    })
                   )}
                 </div>
               </div>

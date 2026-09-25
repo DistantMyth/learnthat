@@ -16,7 +16,6 @@ export const tauriApi = {
       return null;
     } catch (err) {
       console.warn('Native dialog error or not running in Tauri window:', err);
-      // Browser preview fallback prompt
       const fallback = prompt('Enter the absolute path to your learning/course folder:');
       return fallback && fallback.trim() ? fallback.trim() : null;
     }
@@ -29,12 +28,12 @@ export const tauriApi = {
   async toggleVideoWatched(
     videoPath: string,
     markAsWatched: boolean,
-    folderToRescan?: string
-  ): Promise<ScanResult | null> {
-    return await invoke<ScanResult | null>('toggle_video_watched', {
+    videoDuration?: number
+  ): Promise<string> {
+    return await invoke<string>('toggle_video_watched', {
       videoPath,
       markAsWatched,
-      folderToRescan,
+      videoDuration,
     });
   },
 
